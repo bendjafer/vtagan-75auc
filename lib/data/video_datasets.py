@@ -5,8 +5,15 @@ import numpy as np
 from PIL import Image
 import torch.utils.data as data
 from torchvision import transforms
-from lib.data.datasets import FD, find_classes, IMG_EXTENSIONS
+from lib.data.utils import FD, find_classes, IMG_EXTENSIONS
 import random
+
+
+def ensure_tensor(x):
+    """Convert PIL Image to tensor if needed"""
+    if isinstance(x, Image.Image):
+        return transforms.ToTensor()(x)
+    return x
 
 
 class TemporalAugmentation:
@@ -84,11 +91,10 @@ def make_snippet_dataset(dir, class_to_idx):
 
 class VideoSnippetDataset(data.Dataset):
     """
-    Dataset for loading video snippets (folders containing 16 frames each)
-    Each sample is a video snippet with 16 frames
+    Dataset for loading video snippets (folders containing 16 frames each)    Each sample is a video snippet with 16 frames
     """
     
-    def __init__(self, root, transform=None, num_frames=16):
+    def __init__(self, root, transform=None, num_frames=16, image_size=256):
         classes, class_to_idx = find_classes(root)
         snippets = make_snippet_dataset(root, class_to_idx)
         
@@ -102,6 +108,7 @@ class VideoSnippetDataset(data.Dataset):
         self.class_to_idx = class_to_idx
         self.transform = transform
         self.num_frames = num_frames
+        self.image_size = image_size if isinstance(image_size, tuple) else (image_size, image_size)
 
     def __getitem__(self, index):
         """
@@ -133,19 +140,21 @@ class VideoSnippetDataset(data.Dataset):
         
         for tif_file in tif_files:
             frame_path = os.path.join(snippet_path, tif_file)
-            
-            # Load frame
+              # Load frame
             img = cv2.imread(frame_path)
             if img is None:
                 raise ValueError(f"Could not load frame: {frame_path}")
             
             # Apply frequency decomposition
-            lap, res = FD(img)
-            
-            # Apply transforms
+            lap, res = FD(img, size=self.image_size)
+              # Apply transforms
             if self.transform is not None:
                 lap = self.transform(lap)
                 res = self.transform(res)
+            else:
+                # Convert to tensor if no transform applied
+                lap = ensure_tensor(lap)
+                res = ensure_tensor(res)
             
             lap_frames.append(lap)
             res_frames.append(res)
@@ -165,9 +174,10 @@ class VideoSnippetDatasetAug(VideoSnippetDataset):
     Video snippet dataset with data augmentation
     """
     
-    def __init__(self, root, transform=None, transform_aug=None, num_frames=16):
+    def __init__(self, root, transform=None, transform_aug=None, num_frames=16, image_size=256):
         super(VideoSnippetDatasetAug, self).__init__(root, transform, num_frames)
         self.transform_aug = transform_aug
+        self.image_size = image_size if isinstance(image_size, tuple) else (image_size, image_size)
 
     def __getitem__(self, index):
         """
@@ -184,9 +194,7 @@ class VideoSnippetDatasetAug(VideoSnippetDataset):
             while len(tif_files) < self.num_frames:
                 tif_files.append(tif_files[-1])
         elif len(tif_files) > self.num_frames:
-            tif_files = tif_files[:self.num_frames]
-        
-        # Apply temporal augmentation to frame order
+            tif_files = tif_files[:self.num_frames]        # Apply temporal augmentation to frame order
         tif_files = TemporalAugmentation.apply_temporal_jitter(tif_files, probability=0.3)
         tif_files = TemporalAugmentation.apply_frame_skip(tif_files, probability=0.2)
         tif_files = TemporalAugmentation.apply_temporal_reverse(tif_files, probability=0.15)
@@ -205,12 +213,16 @@ class VideoSnippetDatasetAug(VideoSnippetDataset):
                 raise ValueError(f"Could not load frame: {frame_path}")
             
             # Apply frequency decomposition
-            lap, res = FD(img)
+            lap, res = FD(img, size=self.image_size)
             
             # Apply normal transforms
             if self.transform is not None:
                 lap = self.transform(lap)
                 res = self.transform(res)
+            else:
+                # Convert to tensor if no transform applied
+                lap = ensure_tensor(lap)
+                res = ensure_tensor(res)
             
             # Create augmented version
             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -223,6 +235,11 @@ class VideoSnippetDatasetAug(VideoSnippetDataset):
             res_frames.append(res)
             aug_frames.append(aug_img)
         
+        # Ensure all frames are tensors before stacking
+        lap_frames = [ensure_tensor(frame) for frame in lap_frames]
+        res_frames = [ensure_tensor(frame) for frame in res_frames]
+        aug_frames = [ensure_tensor(frame) for frame in aug_frames]
+        
         # Stack frames into tensors
         lap_tensor = torch.stack(lap_frames)  # (num_frames, 3, H, W)
         res_tensor = torch.stack(res_frames)  # (num_frames, 3, H, W)
@@ -231,13 +248,13 @@ class VideoSnippetDatasetAug(VideoSnippetDataset):
         return lap_tensor, res_tensor, aug_tensor, target
 
 
-class VideoSnippetDatasetUCSD_Ped2(VideoSnippetDataset):
+class VideoSnippetDatasetEnhanced(VideoSnippetDataset):
     """
-    Video snippet dataset with simplified UCSD Ped2 specific augmentation
+    Video snippet dataset with general video augmentation
     """
     
-    def __init__(self, root, transform=None, transform_aug=None, num_frames=16, temporal_mode='conservative'):
-        super(VideoSnippetDatasetUCSD_Ped2, self).__init__(root, transform, num_frames)
+    def __init__(self, root, transform=None, transform_aug=None, num_frames=16, temporal_mode='conservative', image_size=256):
+        super(VideoSnippetDatasetEnhanced, self).__init__(root, transform, num_frames, image_size)
         self.transform_aug = transform_aug
         self.temporal_mode = temporal_mode
     
@@ -258,21 +275,19 @@ class VideoSnippetDatasetUCSD_Ped2(VideoSnippetDataset):
                 tif_files.append(tif_files[-1])
         elif len(tif_files) > self.num_frames:
             tif_files = tif_files[:self.num_frames]
+          # Apply general temporal augmentation
+        from lib.data.video_augmentation import TemporalAugmentation
         
-        # Apply UCSD Ped2 simplified temporal augmentation
-        from lib.data.ucsd_ped2_augmentation import UCSD_Ped2_TemporalAugmentation
-        
-        if self.temporal_mode == 'minimal':
-            # Almost no temporal augmentation
-            tif_files = UCSD_Ped2_TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.1)
+        if self.temporal_mode == 'minimal':            # Almost no temporal augmentation
+            tif_files = TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.1)
         elif self.temporal_mode == 'moderate':
             # More temporal variation
-            tif_files = UCSD_Ped2_TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.25)
-            tif_files = UCSD_Ped2_TemporalAugmentation.apply_pedestrian_speed_variation(tif_files, probability=0.2)
+            tif_files = TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.25)
+            tif_files = TemporalAugmentation.apply_object_speed_variation(tif_files, probability=0.2)
         else:  # conservative
             # Balanced approach
-            tif_files = UCSD_Ped2_TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.15)
-            tif_files = UCSD_Ped2_TemporalAugmentation.apply_pedestrian_speed_variation(tif_files, probability=0.1)
+            tif_files = TemporalAugmentation.apply_minimal_temporal_jitter(tif_files, probability=0.15)
+            tif_files = TemporalAugmentation.apply_object_speed_variation(tif_files, probability=0.1)
         
         # Load and process all frames
         lap_frames = []
@@ -286,14 +301,16 @@ class VideoSnippetDatasetUCSD_Ped2(VideoSnippetDataset):
             img = cv2.imread(frame_path)
             if img is None:
                 raise ValueError(f"Could not load frame: {frame_path}")
-            
-            # Apply frequency decomposition
-            lap, res = FD(img)
-            
-            # Apply normal transforms
+              # Apply frequency decomposition
+            lap, res = FD(img, size=self.image_size)
+              # Apply normal transforms
             if self.transform is not None:
                 lap = self.transform(lap)
                 res = self.transform(res)
+            else:
+                # Convert to tensor if no transform applied
+                lap = ensure_tensor(lap)
+                res = ensure_tensor(res)
             
             # Create augmented version
             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))

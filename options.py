@@ -16,7 +16,7 @@ class Options():
 
         ##
         # Base
-        self.parser.add_argument('--dataset', default='bottle', help='folder')
+        self.parser.add_argument('--dataset', default='ucsd2', help='folder')
         self.parser.add_argument('--dataroot', default='', help='path to dataset')        
         self.parser.add_argument('--path', default='', help='path to the folder or image to be predicted.')
         self.parser.add_argument('--batchsize', type=int, default=32, help='input batch size')
@@ -32,13 +32,13 @@ class Options():
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         self.parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
         self.parser.add_argument('--name', type=str, default='experiment_name', help='name of the experiment')
-        self.parser.add_argument('--model', type=str, default='ocr_gan_aug', help='chooses which model to use. ganomaly')
+        self.parser.add_argument('--model', type=str, default='gan_model', help='chooses which model to use. ganomaly')
         self.parser.add_argument('--display_server', type=str, default="http://localhost", help='visdom server of the web display')
         self.parser.add_argument('--display_port', type=int, default=8097, help='visdom port of the web display')
         self.parser.add_argument('--display_id', type=int, default=0, help='window id of the web display')
         self.parser.add_argument('--display', action='store_true', help='Use visdom.')
         self.parser.add_argument('--verbose', action='store_true', help='Print the training and model details.')
-        self.parser.add_argument('--outf', default='./output', help='folder to outpuucsd2t images and model checkpoints')
+        self.parser.add_argument('--outf', default='./output', help='folder to output images and model checkpoints')
         self.parser.add_argument('--manualseed', default=1, type=int, help='manual seed')
         self.parser.add_argument('--note', default='bad', help='note for experiments')
         self.parser.add_argument('--metric', type=str, default='roc', help='Evaluation metric.')
@@ -60,12 +60,10 @@ class Options():
         self.parser.add_argument('--niter_decay', type=int, default=100, help='# of iter to linearly decay learning rate to zero')
         self.parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
         self.parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
+        self.parser.add_argument('--grad_clip_norm', type=float, default=1.0, help='gradient clipping norm (0 to disable)')
         self.parser.add_argument('--w_adv', type=float, default=1, help='Weight for adversarial loss. default=1')
         self.parser.add_argument('--w_con', type=float, default=50, help='Weight for reconstruction loss. default=50')
         self.parser.add_argument('--w_lat', type=float, default=1, help='Weight for latent space loss. default=1')
-        
-        # Gradient clipping for training stability
-        self.parser.add_argument('--grad_clip_norm', type=float, default=1.0, help='Gradient clipping norm. Set to 0 to disable.')
         
         # Temporal attention and loss weights for video models
         self.parser.add_argument('--use_temporal_attention', action='store_true', help='Enable temporal attention modules')
@@ -81,16 +79,22 @@ class Options():
                                      'center_crop (crop to square), '
                                      'pad_square (pad to square), '
                                      'stretch (original behavior, causes distortion)')
-        
-        # UCSD Ped2 specific augmentation options
-        self.parser.add_argument('--ucsd_augmentation', type=str, default='conservative',
-                                choices=['minimal', 'conservative', 'moderate'],
-                                help='UCSD Ped2 augmentation mode: '
+          # Video augmentation options
+        self.parser.add_argument('--video_augmentation', type=str, default='conservative',
+                                choices=['minimal', 'conservative', 'moderate'],                                help='Video augmentation mode: '
                                      'minimal (almost no augmentation), '
                                      'conservative (default, balanced), '
                                      'moderate (more variation)')
-        self.parser.add_argument('--use_ucsd_augmentation', action='store_true', 
-                                help='Use simplified UCSD Ped2 specific augmentation instead of general video augmentation')
+        self.parser.add_argument('--use_video_augmentation', action='store_true', 
+                                help='Use specialized video augmentation instead of general video augmentation')
+        
+        # Optical Flow Enhancement options
+        self.parser.add_argument('--use_optical_flow', action='store_true', default=True,
+                                help='Enable optical flow feature fusion for motion-aware anomaly detection')
+        self.parser.add_argument('--optical_flow_weight', type=float, default=0.2,
+                                help='Weight for optical flow features in fusion (0.0-1.0)')
+        self.parser.add_argument('--motion_magnitude_weight', type=float, default=0.1,
+                                help='Weight for motion magnitude sensitivity (0.0-1.0)')
         
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='lambda|step|plateau')
         self.parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
@@ -98,11 +102,9 @@ class Options():
         self.opt = None
 
         
-
     def parse(self):
         """ Parse Arguments.
         """
-
         self.opt = self.parser.parse_args()
         self.opt.isTrain = self.isTrain   # train or test
 
